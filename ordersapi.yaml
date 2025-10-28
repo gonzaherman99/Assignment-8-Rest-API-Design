@@ -1,0 +1,234 @@
+openapi: 3.1.0
+info:
+  title: Movie Theater Orders API
+  version: "1.0.0"
+  description: |
+    API for creating and managing ticket orders prior to payment.
+    Typical flow: client fetches showtimes and seat map, then **creates an order**
+    to temporarily hold selected seats. Payment is handled by a separate payments API.
+    After successful payment, tickets can be issued by a tickets API.
+
+servers:
+  - url: https://api.cinema.example.com
+
+tags:
+  - name: Orders
+    description: Create, read, and cancel ticket orders.
+
+paths:
+  /v1/orders:
+    post:
+      tags: [Orders]
+      summary: Create an order and place a temporary hold on seats
+      operationId: createOrder
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateOrderRequest'
+            examples:
+              example:
+                value:
+                  showtimeId: "st_987"
+                  seats:
+                    - seatId: "A10"
+                      price: 9.99
+                    - seatId: "A11"
+                      price: 9.99
+                  customer:
+                    email: "pat@example.com"
+      responses:
+        "201":
+          description: Created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Order'
+        "400":
+          description: Bad Request (invalid input)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        "409":
+          description: Seat already taken or conflicting hold
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        "422":
+          description: Unprocessable Entity (validation failed)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /v1/orders/{orderId}:
+    get:
+      tags: [Orders]
+      summary: Get an order by ID
+      operationId: getOrder
+      parameters:
+        - name: orderId
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Order'
+        "404":
+          description: Not Found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        "401":
+          description: Unauthorized
+    delete:
+      tags: [Orders]
+      summary: Cancel an order (release seat holds)
+      operationId: deleteOrder
+      parameters:
+        - name: orderId
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "204":
+          description: No Content (order canceled)
+        "404":
+          description: Not Found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        "409":
+          description: Conflict (order cannot be canceled, e.g., already paid or expired)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+components:
+  securitySchemes:
+    BearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+
+  schemas:
+    CreateOrderRequest:
+      type: object
+      required: [showtimeId, seats, customer]
+      properties:
+        showtimeId:
+          type: string
+          description: Identifier for the selected showtime.
+        seats:
+          type: array
+          minItems: 1
+          description: Seats to hold for this order.
+          items:
+            $ref: '#/components/schemas/SeatSelection'
+        customer:
+          type: object
+          required: [email]
+          properties:
+            email:
+              type: string
+              format: email
+            phone:
+              type: string
+              description: Optional contact number.
+      additionalProperties: false
+
+    SeatSelection:
+      type: object
+      required: [seatId, price]
+      properties:
+        seatId:
+          type: string
+          description: Seat identifier (e.g., "A10").
+        price:
+          type: number
+          format: float
+          description: Unit price for this seat.
+      additionalProperties: false
+
+    Order:
+      type: object
+      required: [orderId, status, showtimeId, seats, totalAmount, currency, createdAt]
+      properties:
+        orderId:
+          type: string
+        status:
+          type: string
+          enum: [PENDING_PAYMENT, CONFIRMED, CANCELED, EXPIRED]
+        showtimeId:
+          type: string
+        theaterId:
+          type: string
+          description: Optional theater location identifier.
+        movieId:
+          type: string
+          description: Optional movie identifier.
+        seats:
+          type: array
+          items:
+            $ref: '#/components/schemas/SeatSelection'
+        totalAmount:
+          type: number
+          format: float
+        currency:
+          type: string
+          example: USD
+        expiresAt:
+          type: string
+          format: date-time
+          description: When the seat hold will expire if not paid.
+        createdAt:
+          type: string
+          format: date-time
+        tickets:
+          type: array
+          description: Populated after successful payment & ticket issuance.
+          items:
+            $ref: '#/components/schemas/Ticket'
+      additionalProperties: false
+
+    Ticket:
+      type: object
+      required: [ticketId, seatId]
+      properties:
+        ticketId:
+          type: string
+        seatId:
+          type: string
+        qrCode:
+          type: string
+          description: Base64-encoded PNG of QR code (optional).
+        confirmationNumber:
+          type: string
+          description: Ticket confirmation code (optional).
+
+    Error:
+      type: object
+      required: [code, message]
+      properties:
+        code:
+          type: string
+        message:
+          type: string
+        details:
+          description: Optional machine-readable details to assist debugging.
+          oneOf:
+            - type: string
+            - type: object
+            - type: array
